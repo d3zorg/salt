@@ -1,3 +1,4 @@
+import asyncio
 import os
 import stat
 import time
@@ -13,7 +14,7 @@ import salt.utils.stringutils
 from salt.exceptions import SaltDeserializationError
 from salt.utils.event import SaltEvent
 from tests.support.events import eventpublisher_process, eventsender_process
-from tests.support.mock import patch
+from tests.support.mock import MagicMock, patch
 
 NO_LONG_IPC = False
 if getattr(zmq, "IPC_PATH_MAX_LEN", 103) <= 103:
@@ -277,6 +278,29 @@ def test_connect_pull_should_debug_log_on_StreamClosedError():
             assert call.args[0] == "Unable to connect pusher: %s"
             assert isinstance(call.args[1], tornado.iostream.StreamClosedError)
             assert call.args[1].args[0] == "Stream is closed"
+
+
+def test_fire_event_async_cleans_up_publish_tasks():
+    io_loop = asyncio.new_event_loop()
+    event = SaltEvent(node="master", listen=False, io_loop=io_loop)
+    event.cpush = True
+    event.pusher = MagicMock()
+
+    async def _publish(_msg):
+        return None
+
+    event.pusher.publish.side_effect = _publish
+
+    try:
+        for _ in range(5):
+            assert event.fire_event({"data": "foo1"}, "evt1")
+
+        assert len(event._publish_tasks) == 5
+        io_loop.run_until_complete(asyncio.sleep(0))
+        assert event._publish_tasks == []
+    finally:
+        event.destroy()
+        io_loop.close()
 
 
 @pytest.mark.parametrize("error", [Exception, KeyError, IOError])
