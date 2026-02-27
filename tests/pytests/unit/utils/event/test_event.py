@@ -8,13 +8,14 @@ import pytest
 import zmq.eventloop.ioloop
 
 import salt.config
+import salt.ext.tornado.concurrent
 import salt.ext.tornado.ioloop
 import salt.ext.tornado.iostream
 import salt.utils.event
 import salt.utils.stringutils
 from salt.utils.event import SaltEvent
 from tests.support.events import eventpublisher_process, eventsender_process
-from tests.support.mock import patch
+from tests.support.mock import MagicMock, patch
 
 NO_LONG_IPC = False
 if getattr(zmq, "IPC_PATH_MAX_LEN", 103) <= 103:
@@ -310,6 +311,32 @@ def test_connect_pull_should_debug_log_on_StreamClosedError():
             assert call.args[0] == "Unable to connect pusher: %s"
             assert isinstance(call.args[1], salt.ext.tornado.iostream.StreamClosedError)
             assert call.args[1].args[0] == "Stream is closed"
+
+
+def test_fire_event_async_cleans_up_publish_tasks():
+    io_loop = salt.ext.tornado.ioloop.IOLoop()
+    event = SaltEvent(node="master", listen=False, io_loop=io_loop)
+    event.cpush = True
+    event.pusher = MagicMock()
+    tasks = []
+
+    def _send(_msg):
+        task = salt.ext.tornado.concurrent.Future()
+        tasks.append(task)
+        return task
+
+    event.pusher.send.side_effect = _send
+
+    try:
+        for _ in range(5):
+            assert event.fire_event({"data": "foo1"}, "evt1")
+
+        assert len(event._publish_tasks) == 5
+        for task in tasks:
+            task.set_result(None)
+        assert event._publish_tasks == []
+    finally:
+        event.destroy()
 
 
 @pytest.mark.parametrize("error", [Exception, KeyError, IOError])
