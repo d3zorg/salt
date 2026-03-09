@@ -1,0 +1,121 @@
+From ef0474b088c6affdea801a5f178c44ebd108a5e8 Mon Sep 17 00:00:00 2001
+From: Denis Safronenkov <dsafronenkov@axcient.com>
+Date: Thu, 5 Mar 2026 11:30:50 +0300
+Subject: [PATCH 1/2] Track ReqServer ZMQ recv coroutine futures explicitly
+
+(cherry picked from commit 9295a065c94ffa4fc7f8cc05c5509be6b0b75919)
+---
+ salt/transport/zeromq.py | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/salt/transport/zeromq.py b/salt/transport/zeromq.py
+index be1d77d6db..2d2f8d3a57 100644
+--- a/salt/transport/zeromq.py
++++ b/salt/transport/zeromq.py
+@@ -437,8 +437,26 @@ class RequestServer(salt.transport.base.DaemonizedRequestServer):
+         ):
+             os.chmod(os.path.join(self.opts["sock_dir"], "workers.ipc"), 0o600)
+         self.stream = zmq.eventloop.zmqstream.ZMQStream(self._socket, io_loop=io_loop)
++        self.io_loop = io_loop
+         self.message_handler = message_handler
+-        self.stream.on_recv_stream(self.handle_message)
++        self.stream.on_recv_stream(self._handle_message_callback)
++
++    def _handle_message_callback(self, stream, payload):
++        """
++        ZMQStream recv callbacks are synchronous. If we register a coroutine
++        directly, the returned Future is ignored by ZMQStream and exception
++        handling/completion tracking is left implicit.
++        """
++        future = self.handle_message(stream, payload)
++        if hasattr(future, "add_done_callback"):
++            self.io_loop.add_future(future, self._handle_message_future_done)
++
++    @staticmethod
++    def _handle_message_future_done(future):
++        try:
++            future.result()
++        except Exception:  # pylint: disable=broad-except
++            log.error("Unhandled exception in request server callback", exc_info=True)
+ 
+     @salt.ext.tornado.gen.coroutine
+     def handle_message(self, stream, payload):
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 36648d01ab04ab24270b070c6dfed2d27d77d98a Mon Sep 17 00:00:00 2001
+From: Denis Safronenkov <dsafronenkov@axcient.com>
+Date: Thu, 5 Mar 2026 20:31:05 +0300
+Subject: [PATCH 2/2] Track ZMQ publish callbacks futures to prevent leaks
+
+---
+ salt/transport/zeromq.py | 33 +++++++++++++++++++++++++++++++--
+ 1 file changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/salt/transport/zeromq.py b/salt/transport/zeromq.py
+index 2d2f8d3a57..dd9bf4e8dc 100644
+--- a/salt/transport/zeromq.py
++++ b/salt/transport/zeromq.py
+@@ -287,12 +287,29 @@ class PublishClient(salt.transport.base.PublishClient):
+         :param func callback: A function which should be called when data is received
+         """
+         try:
+-            return self.stream.on_recv(callback)
++            if callback is None:
++                return self.stream.on_recv(None)
++            return self.stream.on_recv(self._on_recv_callback(callback))
+         except OSError as exc:
+             if callback is None and str(exc) == "Stream is closed":
+                 return
+             raise
+ 
++    def _on_recv_callback(self, callback):
++        def run_callback(messages):
++            future = callback(messages)
++            if hasattr(future, "add_done_callback"):
++                self.io_loop.add_future(future, self._on_recv_future_done)
++
++        return run_callback
++
++    @staticmethod
++    def _on_recv_future_done(future):
++        try:
++            future.result()
++        except Exception:  # pylint: disable=broad-except
++            log.error("Unhandled exception in publish client callback", exc_info=True)
++
+     @salt.ext.tornado.gen.coroutine
+     def send(self, msg):
+         self.stream.send(msg, noblock=True)
+@@ -826,6 +843,13 @@ class PublishServer(salt.transport.base.DaemonizedPublishServer):
+     def __init__(self, opts):
+         self.opts = opts
+ 
++    @staticmethod
++    def _on_recv_future_done(future):
++        try:
++            future.result()
++        except Exception:  # pylint: disable=broad-except
++            log.error("Unhandled exception in publisher callback", exc_info=True)
++
+     def connect(self):
+         return salt.ext.tornado.gen.sleep(5)
+ 
+@@ -888,7 +912,12 @@ class PublishServer(salt.transport.base.DaemonizedPublishServer):
+                     exc_info_on_loglevel=logging.DEBUG,
+                 )
+ 
+-        pull_sock.on_recv(on_recv)
++        def on_recv_callback(packages):
++            future = on_recv(packages)
++            if hasattr(future, "add_done_callback"):
++                self.io_loop.add_future(future, self._on_recv_future_done)
++
++        pull_sock.on_recv(on_recv_callback)
+         try:
+             ioloop.start()
+         except (KeyboardInterrupt, SystemExit):
+-- 
+2.50.1 (Apple Git-155)
+

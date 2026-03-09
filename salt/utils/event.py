@@ -450,10 +450,20 @@ class SaltEvent:
             self.pusher.close()
             self.pusher = None
             self.cpush = False
-        for task in self._publish_tasks:
+        for task in self._publish_tasks[:]:
             if task and not task.done():
                 task.cancel()
         self._publish_tasks.clear()
+
+    def _remove_publish_task(self, task):
+        """
+        Remove completed publish tasks to avoid unbounded task tracking growth.
+        """
+        try:
+            self._publish_tasks.remove(task)
+        except ValueError:
+            # Task list can be cleared during teardown before callbacks run.
+            pass
 
     @classmethod
     def unpack(cls, raw):
@@ -833,6 +843,7 @@ class SaltEvent:
         else:
             task = self.io_loop.create_task(self.pusher.publish(msg))
             self._publish_tasks.append(task)
+            task.add_done_callback(self._remove_publish_task)
         return True
 
     def fire_master(self, data, tag, timeout=1000):
