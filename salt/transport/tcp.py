@@ -883,6 +883,7 @@ class PubServer(salt.ext.tornado.tcpserver.TCPServer):
                 client.close()
                 self.remove_presence_callback(client)
                 self.clients.discard(client)
+                unpacker = salt.utils.msgpack.Unpacker()
                 break
             except Exception as e:  # pylint: disable=broad-except
                 log.error(

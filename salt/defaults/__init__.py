@@ -60,3 +60,9 @@ It's used to differentiate from `None`, `True`, `False` which, in some
 cases are proper defaults and are also proper values to pass.
 """
 NOT_SET = _Constant("NOT_SET")
+
+# Default timeout in seconds for IPC publisher writes to slow/dead subscribers.
+# When a subscriber cannot receive data within this window, the connection is
+# closed and discarded to prevent unbounded accumulation of pending write frames
+# in the publisher process (most visibly in ReqServer MWorker processes).
+IPC_WRITE_TIMEOUT = 15

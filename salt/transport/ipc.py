@@ -2,12 +2,14 @@
 IPC transport classes
 """
 
+import datetime
 import errno
 import logging
 import socket
 import time
 import warnings
 
+import salt.defaults
 import salt.ext.tornado
 import salt.ext.tornado.concurrent
 import salt.ext.tornado.gen
@@ -185,6 +187,7 @@ class IPCServer:
                     )
             except _StreamClosedError:
                 log.trace("Client disconnected from IPC %s", self.socket_path)
+                unpacker = salt.utils.msgpack.Unpacker(raw=False)
                 break
             except OSError as exc:
                 # On occasion an exception will occur with
@@ -534,8 +537,25 @@ class IPCMessagePublisher:
 
     @salt.ext.tornado.gen.coroutine
     def _write(self, stream, pack):
+        timeout = self.opts.get(
+            "ipc_write_timeout", salt.defaults.IPC_WRITE_TIMEOUT
+        )
         try:
-            yield stream.write(pack)
+            yield salt.ext.tornado.gen.with_timeout(
+                datetime.timedelta(seconds=timeout),
+                stream.write(pack),
+                quiet_exceptions=(StreamClosedError,),
+            )
+        except TornadoTimeoutError:
+            log.trace(
+                "IPC write to subscriber timed out after %d seconds, "
+                "closing slow/dead client on %s",
+                timeout,
+                self.socket_path,
+            )
+            if not stream.closed():
+                stream.close()
+            self.streams.discard(stream)
         except StreamClosedError:
             log.trace("Client disconnected from IPC %s", self.socket_path)
             self.streams.discard(stream)
