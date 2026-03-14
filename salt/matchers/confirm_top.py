@@ -22,7 +22,9 @@ def confirm_top(match, data, nodegroups=None):
             if "match" in item:
                 matcher = item["match"]
 
-    matchers = salt.loader.matchers(__opts__)
+    if "matchers" not in __context__:
+        __context__["matchers"] = salt.loader.matchers(__opts__)
+    matchers = __context__["matchers"]
     funcname = matcher + "_match.match"
     if matcher == "nodegroup":
         return matchers[funcname](match, nodegroups)
