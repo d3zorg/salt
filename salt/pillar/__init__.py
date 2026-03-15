@@ -587,15 +587,19 @@ class Pillar:
         self.rend = salt.loader.render(
             self.opts, self.functions, self.client, file_client=self.client
         )
-        ext_pillar_opts = copy.deepcopy(self.opts)
         # Keep the incoming opts ID intact, ie, the master id
+        # Avoid deepcopy here since LazyLoader will copy opts internally.
+        # Temporarily swap the id key so the pillars loader sees the master id.
+        _orig_id = self.opts.get("id")
         if "id" in opts:
-            ext_pillar_opts["id"] = opts["id"]
+            self.opts["id"] = opts["id"]
         self.merge_strategy = "smart"
         if opts.get("pillar_source_merging_strategy"):
             self.merge_strategy = opts["pillar_source_merging_strategy"]
 
-        self.ext_pillars = salt.loader.pillars(ext_pillar_opts, self.functions)
+        self.ext_pillars = salt.loader.pillars(self.opts, self.functions)
+        if "id" in opts:
+            self.opts["id"] = _orig_id
         self.ignored_pillars = {}
         self.pillar_override = pillar_override or {}
         if not isinstance(self.pillar_override, dict):

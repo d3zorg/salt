@@ -274,7 +274,11 @@ class LazyLoader(salt.utils.lazy.LazyDict):
                 self.pack[i] = self.pack[i].value()
         if opts is None:
             opts = {}
-        opts = copy.deepcopy(opts)
+        _opts_copy = dict(opts)
+        for _key in ("grains", "pillar"):
+            if _key in _opts_copy:
+                _opts_copy[_key] = copy.deepcopy(_opts_copy[_key])
+        opts = _opts_copy
         for i in ["pillar", "grains"]:
             if i in opts and isinstance(
                 opts[i], salt.loader.context.NamedLoaderContext
