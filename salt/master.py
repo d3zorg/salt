@@ -998,6 +998,22 @@ class MWorker(salt.utils.process.SignalHandlingProcess):
                 pass
         super()._handle_signals(signum, sigframe)
 
+    @staticmethod
+    def _trim_memory():
+        """
+        Return freed heap memory to the OS via malloc_trim(0).
+
+        MWorker processes accumulate RSS over time due to pymalloc arena
+        fragmentation from transient allocations during request handling.
+        Freed Python objects release their slots within arenas, but glibc
+        only returns arena pages to the OS when the top of the heap is free.
+        malloc_trim(0) forces that reclamation without affecting live objects.
+        """
+        try:
+            ctypes.CDLL(None).malloc_trim(0)
+        except Exception:  # pylint: disable=broad-except
+            pass
+
     def __bind(self):
         """
         Bind to the local port
@@ -1008,6 +1024,10 @@ class MWorker(salt.utils.process.SignalHandlingProcess):
             req_channel.post_fork(
                 self._handle_payload, io_loop=self.io_loop
             )  # TODO: cleaner? Maybe lazily?
+        trim_cb = salt.ext.tornado.ioloop.PeriodicCallback(
+            self._trim_memory, 300000
+        )
+        trim_cb.start()
         try:
             self.io_loop.start()
         except (KeyboardInterrupt, SystemExit):
