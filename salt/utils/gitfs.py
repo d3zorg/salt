@@ -132,6 +132,16 @@ try:
     PYGIT2_VERSION = Version(pygit2.__version__)
     LIBGIT2_VERSION = Version(pygit2.LIBGIT2_VERSION)
 
+    # Limit libgit2's internal object cache to prevent unbounded RSS growth.
+    # libgit2 >= 1.5.0 uses a much larger default object cache that does not
+    # release memory back to the OS after gitfs traversals, causing MWorker
+    # RSS to grow continuously. GIT_OPT_SET_CACHE_MAX_SIZE = 8.
+    try:
+        _GIT_OPT_SET_CACHE_MAX_SIZE = getattr(pygit2, "GIT_OPT_SET_CACHE_MAX_SIZE", 8)
+        pygit2.option(_GIT_OPT_SET_CACHE_MAX_SIZE, 32 * 1024 * 1024)
+    except Exception:  # pylint: disable=broad-except
+        pass
+
     # Work around upstream bug where bytestrings were being decoded using the
     # default encoding (which is usually ascii on Python 2). This was fixed
     # on 2 Feb 2018, so releases prior to 0.26.3 will need a workaround.
